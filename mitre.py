@@ -5,7 +5,6 @@ import argparse
 from collections import defaultdict
 from typing import List, Tuple, Dict, Any
 
-
 def load_groups(path: str) -> List[Dict[str, Any]]:
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
@@ -20,7 +19,7 @@ def load_groups(path: str) -> List[Dict[str, Any]]:
         }
         return [pseudo_group]
     raise ValueError(f"Expected top-level JSON list in {path}")
-
+    
 TACTIC_ORDER = [
     "reconnaissance",
     "resource-development",
@@ -43,7 +42,6 @@ _TACTIC_INDEX = {t: i for i, t in enumerate(TACTIC_ORDER)}
 def _tactic_sort_key(tactic: str) -> Tuple[int, str]:
     return (_TACTIC_INDEX.get(tactic, 999), tactic)
 
-
 def parse_filter(s: str) -> Tuple[str, str]:
     if "=" in s:
         k, v = s.split("=", 1)
@@ -52,14 +50,12 @@ def parse_filter(s: str) -> Tuple[str, str]:
     else:
         raise argparse.ArgumentTypeError("filter must be in format Key=Value or Key:Value")
     return k.strip(), v.strip()
-
-
+    
 def group_has_metadata(group: Dict[str, Any], key: str, val: str) -> bool:
     for m in group.get("metadata", []):
         if m.get("name") == key and str(m.get("value")) == val:
             return True
     return False
-
 
 def filter_groups(groups: List[Dict[str, Any]], filters: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
     if not filters:
@@ -75,13 +71,11 @@ def filter_groups(groups: List[Dict[str, Any]], filters: List[Tuple[str, str]]) 
             out.append(g)
     return out
 
-
 def filter_groups_by_names(groups: List[Dict[str, Any]], names: List[str]) -> List[Dict[str, Any]]:
     if not names:
         return groups[:]
     name_set = set(names)
     return [g for g in groups if g.get("name") in name_set]
-
 
 def merge_groups_to_layer(selected_groups: List[Dict[str, Any]], layer_name: str = "Merged Layer") -> Dict[str, Any]:
     technique_counts: Dict[str, int] = defaultdict(int)
@@ -124,7 +118,6 @@ def merge_groups_to_layer(selected_groups: List[Dict[str, Any]], layer_name: str
 
     return merged_layer
 
-
 def discover_metadata_keys_values(groups: List[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
     out: Dict[str, Dict[str, int]] = {}
     for g in groups:
@@ -136,7 +129,6 @@ def discover_metadata_keys_values(groups: List[Dict[str, Any]]) -> Dict[str, Dic
             out[k][v] = out[k].get(v, 0) + 1
     return out
 
-
 def _iter_group_techniques(group: Dict[str, Any]):
     for tech in group.get("techniques", []):
         tid = tech.get("techniqueID") or tech.get("id") or tech.get("technique_id")
@@ -145,7 +137,6 @@ def _iter_group_techniques(group: Dict[str, Any]):
         tactic = tech.get("tactic")
         score = tech.get("score", 1)
         yield tid, tactic, score
-
 
 def aggregate_top_techniques(groups: List[Dict[str, Any]], tactic: str | None = None) -> Dict[str, float]:
     counts: Dict[str, float] = defaultdict(float)
@@ -160,7 +151,6 @@ def aggregate_top_techniques(groups: List[Dict[str, Any]], tactic: str | None = 
         for tid, sc in per_group_max.items():
             counts[tid] += sc
     return counts
-
 
 def aggregate_top_per_tactic(groups: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
     per_tactic: Dict[str, Dict[str, float]] = {}
@@ -227,7 +217,6 @@ def cmd_top(args: argparse.Namespace):
     for idx, (tid, cnt) in enumerate(sorted_items[:limit], 1):
         print(f"  {idx:2d}. {tid} - {cnt}")
 
-
 def cmd_list(args: argparse.Namespace):
     groups = load_groups(args.input)
     filters = [parse_filter(f) for f in (args.filter or [])]
@@ -248,7 +237,6 @@ def cmd_list(args: argparse.Namespace):
                 print(f"      metadata: {meta_str}")
             if desc:
                 print(f"      description: {desc}")
-
 
 def cmd_merge(args: argparse.Namespace):
     groups = load_groups(args.input)
@@ -277,7 +265,6 @@ def cmd_merge(args: argparse.Namespace):
         json.dump(merged, fh, indent=4)
     print(f"Wrote merged layer ({len(merged['techniques'])} techniques) to: {out_path}")
 
-
 def cmd_keys(args: argparse.Namespace):
     groups = load_groups(args.input)
     kv = discover_metadata_keys_values(groups)
@@ -291,7 +278,6 @@ def cmd_keys(args: argparse.Namespace):
             print(f"  - {val} ({cnt})")
         if len(entries) > 50:
             print(f"  ... and {len(entries) - 50} more")
-
 
 def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mitre.py", description="List and merge MITRE ATT&CK group JSON by metadata tags.")
@@ -327,7 +313,6 @@ def build_argparser() -> argparse.ArgumentParser:
 
     return p
 
-
 def main():
     parser = build_argparser()
     args = parser.parse_args()
@@ -339,7 +324,5 @@ def main():
         print(f"ERROR: Could not parse JSON file {args.input}: {e}")
     except Exception as e:
         print(f"ERROR: {e}")
-
-
 if __name__ == "__main__":
     main()
