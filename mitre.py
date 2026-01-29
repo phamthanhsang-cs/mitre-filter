@@ -5,12 +5,12 @@ import argparse
 from collections import defaultdict
 from typing import List, Tuple, Dict, Any
 
+
 def load_groups(path: str) -> List[Dict[str, Any]]:
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
     if isinstance(data, list):
         return data
-    # Allow Navigator layer-style input (object with techniques list)
     if isinstance(data, dict) and isinstance(data.get("techniques"), list):
         pseudo_group = {
             "name": data.get("name") or data.get("description") or "Navigator Layer",
@@ -43,6 +43,7 @@ _TACTIC_INDEX = {t: i for i, t in enumerate(TACTIC_ORDER)}
 def _tactic_sort_key(tactic: str) -> Tuple[int, str]:
     return (_TACTIC_INDEX.get(tactic, 999), tactic)
 
+
 def parse_filter(s: str) -> Tuple[str, str]:
     if "=" in s:
         k, v = s.split("=", 1)
@@ -52,11 +53,13 @@ def parse_filter(s: str) -> Tuple[str, str]:
         raise argparse.ArgumentTypeError("filter must be in format Key=Value or Key:Value")
     return k.strip(), v.strip()
 
+
 def group_has_metadata(group: Dict[str, Any], key: str, val: str) -> bool:
     for m in group.get("metadata", []):
         if m.get("name") == key and str(m.get("value")) == val:
             return True
     return False
+
 
 def filter_groups(groups: List[Dict[str, Any]], filters: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
     if not filters:
@@ -72,11 +75,13 @@ def filter_groups(groups: List[Dict[str, Any]], filters: List[Tuple[str, str]]) 
             out.append(g)
     return out
 
+
 def filter_groups_by_names(groups: List[Dict[str, Any]], names: List[str]) -> List[Dict[str, Any]]:
     if not names:
         return groups[:]
     name_set = set(names)
     return [g for g in groups if g.get("name") in name_set]
+
 
 def merge_groups_to_layer(selected_groups: List[Dict[str, Any]], layer_name: str = "Merged Layer") -> Dict[str, Any]:
     technique_counts: Dict[str, int] = defaultdict(int)
@@ -95,7 +100,7 @@ def merge_groups_to_layer(selected_groups: List[Dict[str, Any]], layer_name: str
     max_val = max(technique_counts.values()) if technique_counts else 1
     merged_layer = {
         "name": f"Merged Layer - {layer_name}",
-        "versions": {"attack": "17", "navigator": "5.1.1", "layer": "4.5"},
+        "versions": {"attack": "18", "navigator": "5.1.1", "layer": "4.5"},
         "domain": "enterprise-attack",
         "description": f"Techniques aggregated across {len(selected_groups)} groups. Filters: {layer_name}",
         "techniques": [],
@@ -119,6 +124,7 @@ def merge_groups_to_layer(selected_groups: List[Dict[str, Any]], layer_name: str
 
     return merged_layer
 
+
 def discover_metadata_keys_values(groups: List[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
     out: Dict[str, Dict[str, int]] = {}
     for g in groups:
@@ -130,6 +136,7 @@ def discover_metadata_keys_values(groups: List[Dict[str, Any]]) -> Dict[str, Dic
             out[k][v] = out[k].get(v, 0) + 1
     return out
 
+
 def _iter_group_techniques(group: Dict[str, Any]):
     for tech in group.get("techniques", []):
         tid = tech.get("techniqueID") or tech.get("id") or tech.get("technique_id")
@@ -139,6 +146,7 @@ def _iter_group_techniques(group: Dict[str, Any]):
         score = tech.get("score", 1)
         yield tid, tactic, score
 
+
 def aggregate_top_techniques(groups: List[Dict[str, Any]], tactic: str | None = None) -> Dict[str, float]:
     counts: Dict[str, float] = defaultdict(float)
     for group in groups:
@@ -146,7 +154,6 @@ def aggregate_top_techniques(groups: List[Dict[str, Any]], tactic: str | None = 
         for tid, ttc, score in _iter_group_techniques(group):
             if tactic and ttc != tactic:
                 continue
-            # within one group, take the maximum score observed for a technique
             prev = per_group_max.get(tid, 0)
             if score > prev:
                 per_group_max[tid] = score
@@ -154,10 +161,10 @@ def aggregate_top_techniques(groups: List[Dict[str, Any]], tactic: str | None = 
             counts[tid] += sc
     return counts
 
+
 def aggregate_top_per_tactic(groups: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
     per_tactic: Dict[str, Dict[str, float]] = {}
     for group in groups:
-        # For each tactic within the group, take maximum score per technique
         group_maps: Dict[str, Dict[str, float]] = defaultdict(dict)
         for tid, tactic, score in _iter_group_techniques(group):
             if not tactic:
@@ -171,6 +178,7 @@ def aggregate_top_per_tactic(groups: List[Dict[str, Any]]) -> Dict[str, Dict[str
             for tid, sc in tid_to_score.items():
                 per_tactic[tactic][tid] = per_tactic[tactic].get(tid, 0) + sc
     return per_tactic
+
 
 def cmd_top(args: argparse.Namespace):
     groups = load_groups(args.input)
@@ -219,6 +227,7 @@ def cmd_top(args: argparse.Namespace):
     for idx, (tid, cnt) in enumerate(sorted_items[:limit], 1):
         print(f"  {idx:2d}. {tid} - {cnt}")
 
+
 def cmd_list(args: argparse.Namespace):
     groups = load_groups(args.input)
     filters = [parse_filter(f) for f in (args.filter or [])]
@@ -233,13 +242,13 @@ def cmd_list(args: argparse.Namespace):
         desc = g.get("description", "")
         print(f"{idx:3d}. {name}")
         if args.verbose:
-            # print metadata lines
             meta = g.get("metadata", [])
             if meta:
                 meta_str = ", ".join(f"{m.get('name')}={m.get('value')}" for m in meta)
                 print(f"      metadata: {meta_str}")
             if desc:
                 print(f"      description: {desc}")
+
 
 def cmd_merge(args: argparse.Namespace):
     groups = load_groups(args.input)
@@ -268,6 +277,7 @@ def cmd_merge(args: argparse.Namespace):
         json.dump(merged, fh, indent=4)
     print(f"Wrote merged layer ({len(merged['techniques'])} techniques) to: {out_path}")
 
+
 def cmd_keys(args: argparse.Namespace):
     groups = load_groups(args.input)
     kv = discover_metadata_keys_values(groups)
@@ -276,12 +286,12 @@ def cmd_keys(args: argparse.Namespace):
         return
     for key in sorted(kv.keys()):
         print(f"{key}:")
-        # show up to 50 values, sorted by count desc then value
         entries = sorted(kv[key].items(), key=lambda x: (-x[1], x[0]))
         for val, cnt in entries[:50]:
             print(f"  - {val} ({cnt})")
         if len(entries) > 50:
             print(f"  ... and {len(entries) - 50} more")
+
 
 def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mitre.py", description="List and merge MITRE ATT&CK group JSON by metadata tags.")
@@ -303,11 +313,9 @@ def build_argparser() -> argparse.ArgumentParser:
     sm.add_argument("--output", "-o", help="Output file path for merged layer JSON (default: generated from filters)")
     sm.set_defaults(func=cmd_merge)
 
-    # keys/values discover
     sk = sub.add_parser("keys", help="List discovered metadata keys and sample values")
     sk.set_defaults(func=cmd_keys)
 
-    # top techniques
     st = sub.add_parser("top", help="Show top techniques overall, per tactic, or per all tactics")
     st.add_argument("--filter", "-f", action="append", help="Filter in form Key=Value (can be repeated; AND)")
     st.add_argument("--name", "-n", action="append", help="Group name (exact match). Can be repeated.")
@@ -318,6 +326,7 @@ def build_argparser() -> argparse.ArgumentParser:
     st.set_defaults(func=cmd_top)
 
     return p
+
 
 def main():
     parser = build_argparser()
@@ -330,6 +339,7 @@ def main():
         print(f"ERROR: Could not parse JSON file {args.input}: {e}")
     except Exception as e:
         print(f"ERROR: {e}")
+
 
 if __name__ == "__main__":
     main()
