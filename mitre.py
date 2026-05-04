@@ -1,8 +1,19 @@
 from __future__ import annotations
 import json
 import argparse
+import csv
+import os
 from collections import defaultdict
 from typing import List, Tuple, Dict, Any
+
+
+def load_technique_lookup(path: str) -> Dict[str, str]:
+    lookup = {}
+    with open(path, "r", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            lookup[row["ID"]] = row["name"]
+    return lookup
 
 
 def load_groups(path: str) -> List[Dict[str, Any]]:
@@ -189,6 +200,14 @@ def cmd_top(args: argparse.Namespace):
 
     limit = max(1, args.limit or 10)
 
+    # Load technique lookup if provided and exists
+    lookup = {}
+    if args.technique_lookup and os.path.exists(args.technique_lookup):
+        try:
+            lookup = load_technique_lookup(args.technique_lookup)
+        except Exception as e:
+            print(f"Warning: Could not load technique lookup from {args.technique_lookup}: {e}")
+
     if args.per_tactic:
         per_tactic_counts = aggregate_top_per_tactic(matched)
         if args.tactic:
@@ -209,7 +228,11 @@ def cmd_top(args: argparse.Namespace):
             print(f"Tactic: {tactic}")
             sorted_items = sorted(filtered_items, key=lambda x: (-x[1], x[0]))
             for idx, (tid, cnt) in enumerate(sorted_items[:limit], 1):
-                print(f"  {idx:2d}. {tid} - {cnt}")
+                name = lookup.get(tid, "")
+                if name:
+                    print(f"  {idx:2d}. {tid} ({name}) - {cnt}")
+                else:
+                    print(f"  {idx:2d}. {tid} - {cnt}")
         if not shown_any:
             print("No tactics have techniques meeting the score threshold.")
         return
@@ -222,7 +245,11 @@ def cmd_top(args: argparse.Namespace):
     sorted_items = sorted(filtered_items, key=lambda x: (-x[1], x[0]))
     print("Top techniques" + (f" for tactic '{args.tactic}'" if args.tactic else "") + ":")
     for idx, (tid, cnt) in enumerate(sorted_items[:limit], 1):
-        print(f"  {idx:2d}. {tid} - {cnt}")
+        name = lookup.get(tid, "")
+        if name:
+            print(f"  {idx:2d}. {tid} ({name}) - {cnt}")
+        else:
+            print(f"  {idx:2d}. {tid} - {cnt}")
 
 
 def cmd_list(args: argparse.Namespace):
@@ -293,6 +320,7 @@ def cmd_keys(args: argparse.Namespace):
 def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mitre.py", description="List and merge MITRE ATT&CK group JSON by metadata tags.")
     p.add_argument("--input", "-i", default="all-groups.json", help="Path to groups JSON export (default: all-groups.json)")
+    p.add_argument("--technique-lookup", default="attack_techniques_lookup.csv", help="Path to CSV file with technique ID to name mapping (default: attack_techniques_lookup.csv)")
 
     sub = p.add_subparsers(title="commands", dest="command", required=True)
 
