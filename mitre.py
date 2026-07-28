@@ -16,6 +16,18 @@ def load_technique_lookup(path: str) -> Dict[str, str]:
     return lookup
 
 
+def load_detection_rules(path: str) -> List[Dict[str, str]]:
+    rules = []
+    with open(path, "r", encoding="utf-8-sig", newline="") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            technique_id = (row.get("Technique ID") or "").strip()
+            if not technique_id or technique_id.upper() == "N/A":
+                continue
+            rules.append(row)
+    return rules
+
+
 def load_groups(path: str) -> List[Dict[str, Any]]:
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
@@ -91,6 +103,18 @@ def filter_groups_by_names(groups: List[Dict[str, Any]], names: List[str]) -> Li
         return groups[:]
     name_set = set(names)
     return [g for g in groups if g.get("name") in name_set]
+
+
+def write_csv(path: str, fieldnames: List[str], rows: List[Dict[str, Any]]) -> None:
+    """Write report data to a UTF-8 CSV file with a header row."""
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def format_metadata(metadata: List[Dict[str, Any]]) -> str:
+    return "; ".join(f"{m.get('name')}={m.get('value')}" for m in metadata)
 
 
 def merge_groups_to_layer(selected_groups: List[Dict[str, Any]], layer_name: str = "Merged Layer") -> Dict[str, Any]:
@@ -188,6 +212,121 @@ def aggregate_top_per_tactic(groups: List[Dict[str, Any]]) -> Dict[str, Dict[str
     return per_tactic
 
 
+def _technique_parent(technique_id: str) -> str:
+    return technique_id.split(".", 1)[0]
+
+
+def _confidence_sort_value(confidence: str) -> int:
+    order = {"high": 3, "medium": 2, "low": 1}
+    return order.get((confidence or "").strip().lower(), 0)
+
+
+def map_rules_to_techniques(
+    technique_rows: List[Dict[str, Any]],
+    rules: List[Dict[str, str]],
+    include_parent: bool = True,
+) -> List[Dict[str, Any]]:
+    rules_by_tid: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+    for rule in rules:
+        tid = (rule.get("Technique ID") or "").strip()
+        if tid:
+            rules_by_tid[tid].append(rule)
+
+    mapped_rows = []
+    for technique in technique_rows:
+        tid = technique["technique_id"]
+        candidates = [(tid, "exact")]
+        parent_tid = _technique_parent(tid)
+        if include_parent and parent_tid != tid:
+            candidates.append((parent_tid, "parent"))
+
+        matched = False
+        for match_tid, match_type in candidates:
+            for rule in rules_by_tid.get(match_tid, []):
+                matched = True
+                mapped_rows.append({
+                    "tactic": technique.get("tactic", ""),
+                    "rank": technique.get("rank", ""),
+                    "technique_id": tid,
+                    "technique_name": technique.get("technique_name", ""),
+                    "aggregated_score": technique.get("aggregated_score", ""),
+                    "match_type": match_type,
+                    "rule": rule.get("Rule", ""),
+                    "rule_tactic": rule.get("Tactic", ""),
+                    "rule_technique": rule.get("Technique", ""),
+                    "rule_technique_id": match_tid,
+                    "confidence": rule.get("Confidence", ""),
+                    "notes": rule.get("Notes", ""),
+                })
+        if not matched:
+            mapped_rows.append({
+                "tactic": technique.get("tactic", ""),
+                "rank": technique.get("rank", ""),
+                "technique_id": tid,
+                "technique_name": technique.get("technique_name", ""),
+                "aggregated_score": technique.get("aggregated_score", ""),
+                "match_type": "unmatched",
+                "rule": "",
+                "rule_tactic": "",
+                "rule_technique": "",
+                "rule_technique_id": "",
+                "confidence": "",
+                "notes": "",
+            })
+
+    return sorted(
+        mapped_rows,
+        key=lambda row: (
+            row.get("match_type") == "unmatched",
+            -float(row.get("aggregated_score") or 0),
+            str(row.get("tactic") or ""),
+            int(row.get("rank") or 999999),
+            -_confidence_sort_value(str(row.get("confidence") or "")),
+            str(row.get("rule") or ""),
+        ),
+    )
+
+
+def build_top_technique_rows(
+    groups: List[Dict[str, Any]],
+    limit: int,
+    min_score: float,
+    per_tactic: bool = False,
+    tactic: str | None = None,
+    lookup: Dict[str, str] | None = None,
+) -> List[Dict[str, Any]]:
+    lookup = lookup or {}
+    rows = []
+    if per_tactic:
+        per_tactic_counts = aggregate_top_per_tactic(groups)
+        tactics = [tactic] if tactic and tactic in per_tactic_counts else sorted(per_tactic_counts.keys(), key=_tactic_sort_key)
+        for tactic_name in tactics:
+            filtered_items = [(tid, cnt) for tid, cnt in per_tactic_counts[tactic_name].items() if cnt >= min_score]
+            sorted_items = sorted(filtered_items, key=lambda x: (-x[1], x[0]))
+            for idx, (tid, cnt) in enumerate(sorted_items[:limit], 1):
+                rows.append({
+                    "tactic": tactic_name,
+                    "rank": idx,
+                    "technique_id": tid,
+                    "technique_name": lookup.get(tid, ""),
+                    "aggregated_score": cnt,
+                })
+        return rows
+
+    counts = aggregate_top_techniques(groups, tactic=tactic)
+    filtered_items = [(tid, cnt) for tid, cnt in counts.items() if cnt >= min_score]
+    sorted_items = sorted(filtered_items, key=lambda x: (-x[1], x[0]))
+    for idx, (tid, cnt) in enumerate(sorted_items[:limit], 1):
+        rows.append({
+            "tactic": tactic or "",
+            "rank": idx,
+            "technique_id": tid,
+            "technique_name": lookup.get(tid, ""),
+            "aggregated_score": cnt,
+        })
+    return rows
+
+
 def cmd_top(args: argparse.Namespace):
     groups = load_groups(args.input)
     filters = [parse_filter(f) for f in (args.filter or [])]
@@ -220,6 +359,7 @@ def cmd_top(args: argparse.Namespace):
             return
 
         shown_any = False
+        csv_rows = []
         for tactic in tactics:
             filtered_items = [(tid, cnt) for tid, cnt in per_tactic_counts[tactic].items() if cnt >= args.min_score]
             if not filtered_items:
@@ -229,12 +369,22 @@ def cmd_top(args: argparse.Namespace):
             sorted_items = sorted(filtered_items, key=lambda x: (-x[1], x[0]))
             for idx, (tid, cnt) in enumerate(sorted_items[:limit], 1):
                 name = lookup.get(tid, "")
+                csv_rows.append({
+                    "tactic": tactic,
+                    "rank": idx,
+                    "technique_id": tid,
+                    "technique_name": name,
+                    "aggregated_score": cnt,
+                })
                 if name:
                     print(f"  {idx:2d}. {tid} ({name}) - {cnt}")
                 else:
                     print(f"  {idx:2d}. {tid} - {cnt}")
         if not shown_any:
             print("No tactics have techniques meeting the score threshold.")
+        if args.csv:
+            write_csv(args.csv, ["tactic", "rank", "technique_id", "technique_name", "aggregated_score"], csv_rows)
+            print(f"Wrote top-techniques CSV to: {args.csv}")
         return
 
     counts = aggregate_top_techniques(matched, tactic=args.tactic)
@@ -244,12 +394,112 @@ def cmd_top(args: argparse.Namespace):
     filtered_items = [(tid, cnt) for tid, cnt in counts.items() if cnt >= args.min_score]
     sorted_items = sorted(filtered_items, key=lambda x: (-x[1], x[0]))
     print("Top techniques" + (f" for tactic '{args.tactic}'" if args.tactic else "") + ":")
+    csv_rows = []
     for idx, (tid, cnt) in enumerate(sorted_items[:limit], 1):
         name = lookup.get(tid, "")
+        csv_rows.append({
+            "tactic": args.tactic or "",
+            "rank": idx,
+            "technique_id": tid,
+            "technique_name": name,
+            "aggregated_score": cnt,
+        })
         if name:
             print(f"  {idx:2d}. {tid} ({name}) - {cnt}")
         else:
             print(f"  {idx:2d}. {tid} - {cnt}")
+    if args.csv:
+        write_csv(args.csv, ["tactic", "rank", "technique_id", "technique_name", "aggregated_score"], csv_rows)
+        print(f"Wrote top-techniques CSV to: {args.csv}")
+
+
+def cmd_map_rules(args: argparse.Namespace):
+    groups = load_groups(args.input)
+    filters = [parse_filter(f) for f in (args.filter or [])]
+    matched = filter_groups(groups, filters)
+    matched = filter_groups_by_names(matched, args.name or [])
+
+    if not matched:
+        print("No groups matched the provided filter(s).")
+        return
+
+    lookup = {}
+    if args.technique_lookup and os.path.exists(args.technique_lookup):
+        try:
+            lookup = load_technique_lookup(args.technique_lookup)
+        except Exception as e:
+            print(f"Warning: Could not load technique lookup from {args.technique_lookup}: {e}")
+
+    rules = load_detection_rules(args.rules)
+    limit = max(1, args.limit or 10)
+    technique_rows = build_top_technique_rows(
+        matched,
+        limit=limit,
+        min_score=args.min_score,
+        per_tactic=args.per_tactic,
+        tactic=args.tactic,
+        lookup=lookup,
+    )
+    mapped_rows = map_rules_to_techniques(technique_rows, rules, include_parent=not args.exact_only)
+    if args.per_tactic:
+        mapped_rows = sorted(
+            mapped_rows,
+            key=lambda row: (
+                _tactic_sort_key(str(row.get("tactic") or "")),
+                int(row.get("rank") or 999999),
+                row.get("match_type") == "unmatched",
+                -_confidence_sort_value(str(row.get("confidence") or "")),
+                str(row.get("rule") or ""),
+            ),
+        )
+    matched_rule_rows = [row for row in mapped_rows if row["match_type"] != "unmatched"]
+    unmatched_rows = [row for row in mapped_rows if row["match_type"] == "unmatched"]
+
+    if not mapped_rows:
+        print("No techniques found for the selected groups and filters.")
+        return
+
+    print("SolarWinds rule mapping:")
+    current_tactic = None
+    shown = 0
+    for row in matched_rule_rows:
+        if args.per_tactic and row["tactic"] != current_tactic:
+            current_tactic = row["tactic"]
+            print(f"Tactic: {current_tactic}")
+        prefix = "  " if args.per_tactic else ""
+        print(
+            f"{prefix}{row['technique_id']} score={row['aggregated_score']} "
+            f"-> {row['rule']} ({row['confidence']}, {row['match_type']})"
+        )
+        shown += 1
+
+    if not matched_rule_rows:
+        print("  No SolarWinds rules matched the selected techniques.")
+    if unmatched_rows:
+        print(f"Unmatched techniques: {len(unmatched_rows)}")
+        for row in unmatched_rows[:args.show_unmatched]:
+            name_part = f" ({row['technique_name']})" if row["technique_name"] else ""
+            print(f"  {row['technique_id']}{name_part} score={row['aggregated_score']}")
+        if len(unmatched_rows) > args.show_unmatched:
+            print(f"  ... and {len(unmatched_rows) - args.show_unmatched} more")
+
+    if args.csv:
+        fields = [
+            "tactic",
+            "rank",
+            "technique_id",
+            "technique_name",
+            "aggregated_score",
+            "match_type",
+            "rule",
+            "rule_tactic",
+            "rule_technique",
+            "rule_technique_id",
+            "confidence",
+            "notes",
+        ]
+        write_csv(args.csv, fields, mapped_rows)
+        print(f"Wrote SolarWinds rule mapping CSV to: {args.csv}")
 
 
 def cmd_list(args: argparse.Namespace):
@@ -261,17 +511,31 @@ def cmd_list(args: argparse.Namespace):
         print("No groups matched the provided filter(s).")
         return
 
-    for idx, g in enumerate(sorted(matched, key=lambda x: x.get("name", "")), 1):
+    sorted_groups = sorted(matched, key=lambda x: x.get("name", ""))
+    for idx, g in enumerate(sorted_groups, 1):
         name = g.get("name", "<unnamed>")
         desc = g.get("description", "")
         print(f"{idx:3d}. {name}")
         if args.verbose:
             meta = g.get("metadata", [])
             if meta:
-                meta_str = ", ".join(f"{m.get('name')}={m.get('value')}" for m in meta)
+                meta_str = format_metadata(meta)
                 print(f"      metadata: {meta_str}")
             if desc:
                 print(f"      description: {desc}")
+    if args.csv:
+        rows = [
+            {
+                "rank": idx,
+                "name": g.get("name", "<unnamed>"),
+                "description": g.get("description", ""),
+                "metadata": format_metadata(g.get("metadata", [])),
+                "technique_count": len(g.get("techniques", [])),
+            }
+            for idx, g in enumerate(sorted_groups, 1)
+        ]
+        write_csv(args.csv, ["rank", "name", "description", "metadata", "technique_count"], rows)
+        print(f"Wrote group-list CSV to: {args.csv}")
 
 
 def cmd_merge(args: argparse.Namespace):
@@ -308,13 +572,18 @@ def cmd_keys(args: argparse.Namespace):
     if not kv:
         print("No metadata keys found in input data.")
         return
+    csv_rows = []
     for key in sorted(kv.keys()):
         print(f"{key}:")
         entries = sorted(kv[key].items(), key=lambda x: (-x[1], x[0]))
         for val, cnt in entries[:50]:
             print(f"  - {val} ({cnt})")
+            csv_rows.append({"metadata_key": key, "metadata_value": val, "group_count": cnt})
         if len(entries) > 50:
             print(f"  ... and {len(entries) - 50} more")
+    if args.csv:
+        write_csv(args.csv, ["metadata_key", "metadata_value", "group_count"], csv_rows)
+        print(f"Wrote metadata-keys CSV to: {args.csv}")
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -329,6 +598,7 @@ def build_argparser() -> argparse.ArgumentParser:
     sl.add_argument("--filter", "-f", action="append", help="Filter in form Key=Value (can be repeated; combined with AND)")
     sl.add_argument("--name", "-n", action="append", help="Group name (exact match). Can be repeated.")
     sl.add_argument("--verbose", "-v", action="store_true", help="Show metadata and description for each group")
+    sl.add_argument("--csv", metavar="PATH", help="Write matching groups to a CSV file")
     sl.set_defaults(func=cmd_list)
 
     # merge
@@ -339,6 +609,7 @@ def build_argparser() -> argparse.ArgumentParser:
     sm.set_defaults(func=cmd_merge)
 
     sk = sub.add_parser("keys", help="List discovered metadata keys and sample values")
+    sk.add_argument("--csv", metavar="PATH", help="Write discovered metadata values to a CSV file")
     sk.set_defaults(func=cmd_keys)
 
     st = sub.add_parser("top", help="Show top techniques overall, per tactic, or per all tactics")
@@ -348,7 +619,21 @@ def build_argparser() -> argparse.ArgumentParser:
     st.add_argument("--tactic", "-t", help="Limit to a specific tactic (e.g., persistence, execution)")
     st.add_argument("--min-score", type=float, default=0, help="Minimum aggregated score to include (default: 0)")
     st.add_argument("--per-tactic", action="store_true", help="Show top techniques per tactic")
+    st.add_argument("--csv", metavar="PATH", help="Write displayed top techniques to a CSV file")
     st.set_defaults(func=cmd_top)
+
+    sr = sub.add_parser("map-rules", help="Map top MITRE techniques to SolarWinds detection rules")
+    sr.add_argument("--rules", "-r", default="Solar-Wind-DetectionList-csv.csv", help="SolarWinds rule CSV path")
+    sr.add_argument("--filter", "-f", action="append", help="Filter in form Key=Value (can be repeated; AND)")
+    sr.add_argument("--name", "-n", action="append", help="Group name (exact match). Can be repeated.")
+    sr.add_argument("--limit", "-l", type=int, default=10, help="How many techniques to evaluate (default: 10)")
+    sr.add_argument("--tactic", "-t", help="Limit to a specific tactic (e.g., persistence, execution)")
+    sr.add_argument("--min-score", type=float, default=0, help="Minimum aggregated score to include (default: 0)")
+    sr.add_argument("--per-tactic", action="store_true", help="Map top techniques per tactic")
+    sr.add_argument("--exact-only", action="store_true", help="Only match exact technique IDs, not parent IDs")
+    sr.add_argument("--show-unmatched", type=int, default=20, help="How many unmatched techniques to print (default: 20)")
+    sr.add_argument("--csv", metavar="PATH", help="Write rule mapping to a CSV file")
+    sr.set_defaults(func=cmd_map_rules)
 
     return p
 
